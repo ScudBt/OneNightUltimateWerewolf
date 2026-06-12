@@ -46,6 +46,16 @@ class InsomniacWoke:
     final_role: Role
 
 
+@dataclass(frozen=True)
+class SawWerewolvesAsMinion:
+    wolf_positions: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class DrunkSwapped:
+    center_position: int
+
+
 Observation = Union[
     SawWerewolves,
     LoneWolfPeek,
@@ -54,4 +64,6 @@ Observation = Union[
     Robbed,
     TroublemakerSwapped,
     InsomniacWoke,
+    SawWerewolvesAsMinion,
+    DrunkSwapped,
 ]

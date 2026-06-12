@@ -5,10 +5,12 @@ from itertools import combinations
 from typing import TYPE_CHECKING
 
 from onuw.observations import (
+    DrunkSwapped,
     InsomniacWoke,
     LoneWolfPeek,
     Robbed,
     SawWerewolves,
+    SawWerewolvesAsMinion,
     SeerPeekedCenter,
     SeerPeekedPlayer,
     TroublemakerSwapped,
@@ -16,6 +18,7 @@ from onuw.observations import (
 from onuw.roles import Role
 from onuw.state import (
     Action,
+    DrunkSwapAction,
     GameConfig,
     GameResult,
     GameState,
@@ -91,7 +94,10 @@ def get_legal_actions(state: GameState, seat: int) -> list[Action]:
             for a, b in combinations(others, 2)
         ]
 
-    # INSOMNIAC, VILLAGER — no choice
+    if role == Role.DRUNK:
+        return [DrunkSwapAction(c) for c in centers]
+
+    # MINION, INSOMNIAC, VILLAGER — no choice
     return [NoAction()]
 
 
@@ -153,6 +159,23 @@ def apply_night_action(state: GameState, seat: int, action: Action) -> None:
         )
         state.add_observation(seat, TroublemakerSwapped(a, b))
 
+    elif role == Role.MINION:
+        if not isinstance(action, NoAction):
+            raise ValueError(f"Minion at seat {seat} must use NoAction, got {action!r}")
+        players = state.player_positions()
+        wolf_seats = [p for p in players if state.dealt_roles[p] == Role.WEREWOLF]
+        state.add_observation(seat, SawWerewolvesAsMinion(tuple(wolf_seats)))
+
+    elif role == Role.DRUNK:
+        if not isinstance(action, DrunkSwapAction):
+            raise ValueError(f"Drunk at seat {seat} must use DrunkSwapAction, got {action!r}")
+        center_pos = action.center_position
+        state.current_roles[seat], state.current_roles[center_pos] = (
+            state.current_roles[center_pos],
+            state.current_roles[seat],
+        )
+        state.add_observation(seat, DrunkSwapped(center_pos))
+
     elif role == Role.INSOMNIAC:
         if not isinstance(action, NoAction):
             raise ValueError(f"Insomniac at seat {seat} must use NoAction, got {action!r}")
@@ -169,7 +192,7 @@ def apply_night_action(state: GameState, seat: int, action: Action) -> None:
 # Night phase orchestration
 # ---------------------------------------------------------------------------
 
-WAKE_ORDER = [Role.WEREWOLF, Role.SEER, Role.ROBBER, Role.TROUBLEMAKER, Role.INSOMNIAC]
+WAKE_ORDER = [Role.WEREWOLF, Role.MINION, Role.SEER, Role.ROBBER, Role.TROUBLEMAKER, Role.DRUNK, Role.INSOMNIAC]
 
 
 def run_night(state: GameState, agents: dict[int, "Agent"], rng: random.Random) -> None:
@@ -196,12 +219,14 @@ def run_night(state: GameState, agents: dict[int, "Agent"], rng: random.Random) 
 # Day phase orchestration
 # ---------------------------------------------------------------------------
 
-def run_day(state: GameState, agents: dict[int, "Agent"]) -> None:
-    """One discussion round: each player speaks once in seat order."""
-    for seat in state.player_positions():
-        view = build_private_view(state, seat)
-        statement = agents[seat].speak(view, list(state.public_log))
-        state.public_log.append(f"Player {seat}: {statement}")
+def run_day(state: GameState, agents: dict[int, "Agent"], rounds: int = 1) -> None:
+    for round_num in range(1, rounds + 1):
+        if rounds > 1:
+            state.public_log.append(f"--- Discussion round {round_num} ---")
+        for seat in state.player_positions():
+            view = build_private_view(state, seat)
+            statement = agents[seat].speak(view, list(state.public_log))
+            state.public_log.append(f"Player {seat}: {statement}")
 
 
 # ---------------------------------------------------------------------------
@@ -248,25 +273,29 @@ def resolve_vote(votes: dict[int, int]) -> frozenset[int]:
 
 def evaluate_win(state: GameState, deaths: frozenset[int]) -> GameResult:
     players = state.player_positions()
-    werewolves_present = any(
-        state.current_roles[p] == Role.WEREWOLF for p in players
-    )
+    wolf_players = frozenset(p for p in players if state.current_roles[p] == Role.WEREWOLF)
+    minion_players = frozenset(p for p in players if state.current_roles[p] == Role.MINION)
 
-    if werewolves_present:
-        wolf_players = frozenset(
-            p for p in players if state.current_roles[p] == Role.WEREWOLF
-        )
+    if wolf_players:
         if deaths & wolf_players:
-            # At least one werewolf died → village wins
-            village = frozenset(p for p in players if p not in wolf_players)
+            # At least one werewolf died → village wins; minion loses
+            village = frozenset(p for p in players if p not in wolf_players and p not in minion_players)
             return GameResult(Outcome.VILLAGE_WIN, village, deaths)
         else:
-            return GameResult(Outcome.WEREWOLF_WIN, wolf_players, deaths)
+            # Wolves survive → wolf team (wolves + minion) wins
+            return GameResult(Outcome.WEREWOLF_WIN, wolf_players | minion_players, deaths)
     else:
         # No werewolves among players (all in center)
-        if not deaths:
-            # Correctly no one killed
-            village = frozenset(players)
-            return GameResult(Outcome.VILLAGE_WIN, village, deaths)
+        if minion_players:
+            if deaths:
+                # Someone died with no wolves present → minion wins
+                return GameResult(Outcome.WEREWOLF_WIN, minion_players, deaths)
+            else:
+                # Nobody died → village correctly found no wolves; minion loses
+                village = frozenset(p for p in players if p not in minion_players)
+                return GameResult(Outcome.VILLAGE_WIN, village, deaths)
         else:
-            return GameResult(Outcome.NO_WINNER, frozenset(), deaths)
+            if not deaths:
+                return GameResult(Outcome.VILLAGE_WIN, frozenset(players), deaths)
+            else:
+                return GameResult(Outcome.NO_WINNER, frozenset(), deaths)

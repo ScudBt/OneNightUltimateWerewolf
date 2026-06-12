@@ -61,6 +61,11 @@ class TroublemakerSwapAction:
     target_b: int
 
 
+@dataclass(frozen=True)
+class DrunkSwapAction:
+    center_position: int
+
+
 Action = Union[
     NoAction,
     LoneWolfPeekAction,
@@ -68,6 +73,7 @@ Action = Union[
     SeerPeekCenterAction,
     RobberStealAction,
     TroublemakerSwapAction,
+    DrunkSwapAction,
 ]
 
 

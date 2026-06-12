@@ -12,19 +12,23 @@ from onuw.engine import (
     deal,
     evaluate_win,
     resolve_vote,
+    run_day,
     run_night,
 )
 from onuw.observations import (
+    DrunkSwapped,
     InsomniacWoke,
     LoneWolfPeek,
     Robbed,
     SawWerewolves,
+    SawWerewolvesAsMinion,
     SeerPeekedCenter,
     SeerPeekedPlayer,
     TroublemakerSwapped,
 )
 from onuw.roles import Role
 from onuw.state import (
+    DrunkSwapAction,
     GameConfig,
     GameState,
     LoneWolfPeekAction,
@@ -468,3 +472,200 @@ class TestWinConditions:
         # If the (now-WEREWOLF) seat 0 dies, a Werewolf died
         result2 = evaluate_win(state, frozenset({0}))
         assert result2.outcome == Outcome.VILLAGE_WIN
+
+
+# ---------------------------------------------------------------------------
+# Minion night action
+# ---------------------------------------------------------------------------
+
+class TestMinionNight:
+    def _minion_state(self) -> GameState:
+        # 0=MINION, 1=WEREWOLF, 2=WEREWOLF, 3=SEER, 4=VILLAGER; center: 5-7
+        return make_state(5, [
+            Role.MINION, Role.WEREWOLF, Role.WEREWOLF,
+            Role.SEER, Role.VILLAGER,
+            Role.ROBBER, Role.TROUBLEMAKER, Role.INSOMNIAC,
+        ])
+
+    def test_minion_sees_both_wolves(self) -> None:
+        state = self._minion_state()
+        apply_night_action(state, 0, NoAction())
+        obs = state.observations_for(0)
+        assert len(obs) == 1
+        assert isinstance(obs[0], SawWerewolvesAsMinion)
+        assert set(obs[0].wolf_positions) == {1, 2}
+
+    def test_minion_sees_no_wolves_when_all_in_center(self) -> None:
+        state = make_state(5, [
+            Role.MINION, Role.SEER, Role.ROBBER,
+            Role.VILLAGER, Role.VILLAGER,
+            Role.WEREWOLF, Role.WEREWOLF, Role.TROUBLEMAKER,
+        ])
+        apply_night_action(state, 0, NoAction())
+        obs = state.observations_for(0)
+        assert isinstance(obs[0], SawWerewolvesAsMinion)
+        assert obs[0].wolf_positions == ()
+
+    def test_minion_wrong_action_raises(self) -> None:
+        state = self._minion_state()
+        with pytest.raises(ValueError):
+            apply_night_action(state, 0, LoneWolfPeekAction(5))
+
+    def test_minion_does_not_swap_cards(self) -> None:
+        state = self._minion_state()
+        original = dict(state.current_roles)
+        apply_night_action(state, 0, NoAction())
+        assert state.current_roles == original
+
+
+# ---------------------------------------------------------------------------
+# Drunk night action
+# ---------------------------------------------------------------------------
+
+class TestDrunkNight:
+    def _drunk_state(self) -> GameState:
+        # 0=DRUNK, 1=WEREWOLF, 2=SEER, 3=VILLAGER, 4=VILLAGER; center: 5=ROBBER 6=TM 7=INSOMNIAC
+        return make_state(5, [
+            Role.DRUNK, Role.WEREWOLF, Role.SEER,
+            Role.VILLAGER, Role.VILLAGER,
+            Role.ROBBER, Role.TROUBLEMAKER, Role.INSOMNIAC,
+        ])
+
+    def test_drunk_swaps_card_with_center(self) -> None:
+        state = self._drunk_state()
+        # Center slot 5 = ROBBER; swap Drunk (seat 0) with slot 5
+        apply_night_action(state, 0, DrunkSwapAction(center_position=5))
+        assert state.current_roles[0] == Role.ROBBER
+        assert state.current_roles[5] == Role.DRUNK
+
+    def test_drunk_emits_DrunkSwapped_with_center_position(self) -> None:
+        state = self._drunk_state()
+        apply_night_action(state, 0, DrunkSwapAction(center_position=6))
+        obs = state.observations_for(0)
+        assert len(obs) == 1
+        assert isinstance(obs[0], DrunkSwapped)
+        assert obs[0].center_position == 6
+
+    def test_drunk_observation_does_not_reveal_new_role(self) -> None:
+        state = self._drunk_state()
+        apply_night_action(state, 0, DrunkSwapAction(center_position=5))
+        obs = state.observations_for(0)
+        # DrunkSwapped has no 'role' field
+        assert not hasattr(obs[0], "role")
+
+    def test_drunk_wrong_action_raises(self) -> None:
+        state = self._drunk_state()
+        with pytest.raises(ValueError):
+            apply_night_action(state, 0, NoAction())
+
+    def test_drunk_dealt_role_unchanged(self) -> None:
+        state = self._drunk_state()
+        apply_night_action(state, 0, DrunkSwapAction(center_position=5))
+        assert state.dealt_roles[0] == Role.DRUNK
+
+
+# ---------------------------------------------------------------------------
+# Minion win conditions
+# ---------------------------------------------------------------------------
+
+class TestMinionWinConditions:
+    def _state(self, player_roles: list[Role]) -> GameState:
+        center = [Role.VILLAGER, Role.VILLAGER, Role.VILLAGER]
+        all_roles = player_roles + center
+        pc = len(player_roles)
+        dealt = {i: r for i, r in enumerate(all_roles)}
+        return GameState(
+            player_count=pc,
+            dealt_roles=dict(dealt),
+            current_roles=dict(dealt),
+            public_log=[],
+        )
+
+    def test_wolves_and_minion_survive_wolf_team_wins(self) -> None:
+        # 0=WOLF, 1=MINION, 2=SEER, 3=VILLAGER — wolf dies? No → wolf team wins
+        state = self._state([Role.WEREWOLF, Role.MINION, Role.SEER, Role.VILLAGER])
+        result = evaluate_win(state, frozenset({2}))  # Seer dies
+        assert result.outcome == Outcome.WEREWOLF_WIN
+        assert 0 in result.winners  # wolf wins
+        assert 1 in result.winners  # minion wins
+
+    def test_wolf_dies_minion_loses(self) -> None:
+        state = self._state([Role.WEREWOLF, Role.MINION, Role.SEER, Role.VILLAGER])
+        result = evaluate_win(state, frozenset({0}))  # wolf dies
+        assert result.outcome == Outcome.VILLAGE_WIN
+        assert 1 not in result.winners  # minion loses
+
+    def test_no_wolves_someone_dies_minion_wins(self) -> None:
+        # No wolves among players (all in center/not present); Minion present
+        state = self._state([Role.MINION, Role.SEER, Role.ROBBER, Role.VILLAGER])
+        result = evaluate_win(state, frozenset({2}))  # someone dies
+        assert result.outcome == Outcome.WEREWOLF_WIN
+        assert 0 in result.winners  # minion wins alone
+
+    def test_no_wolves_nobody_dies_minion_loses(self) -> None:
+        state = self._state([Role.MINION, Role.SEER, Role.ROBBER, Role.VILLAGER])
+        result = evaluate_win(state, frozenset())  # nobody dies
+        assert result.outcome == Outcome.VILLAGE_WIN
+        assert 0 not in result.winners  # minion loses
+
+
+# ---------------------------------------------------------------------------
+# run_day with rounds parameter
+# ---------------------------------------------------------------------------
+
+class TestRunDayRounds:
+    def _state_and_agents(self) -> tuple[GameState, dict[int, object]]:
+        state = make_state(3, [
+            Role.WEREWOLF, Role.SEER, Role.VILLAGER,
+            Role.ROBBER, Role.TROUBLEMAKER, Role.INSOMNIAC,
+        ])
+
+        class _FixedAgent:
+            def __init__(self, msg: str) -> None:
+                self._msg = msg
+                self.call_count = 0
+
+            def night_action(self, view: object, legal: object) -> object:
+                return NoAction()
+
+            def speak(self, view: object, log: object) -> str:
+                self.call_count += 1
+                return self._msg
+
+            def vote(self, view: object, log: object) -> int:
+                return 1
+
+        agents: dict[int, object] = {
+            0: _FixedAgent("A"),
+            1: _FixedAgent("B"),
+            2: _FixedAgent("C"),
+        }
+        return state, agents
+
+    def test_default_one_round_no_header(self) -> None:
+        state, agents = self._state_and_agents()
+        run_day(state, agents)  # type: ignore[arg-type]
+        assert not any("Discussion round" in e for e in state.public_log)
+        player_entries = [e for e in state.public_log if e.startswith("Player ")]
+        assert len(player_entries) == 3
+
+    def test_three_rounds_adds_headers(self) -> None:
+        state, agents = self._state_and_agents()
+        run_day(state, agents, rounds=3)  # type: ignore[arg-type]
+        headers = [e for e in state.public_log if "Discussion round" in e]
+        assert len(headers) == 3
+
+    def test_three_rounds_each_player_speaks_three_times(self) -> None:
+        state, agents = self._state_and_agents()
+        run_day(state, agents, rounds=3)  # type: ignore[arg-type]
+        player_entries = [e for e in state.public_log if e.startswith("Player ")]
+        assert len(player_entries) == 9  # 3 players × 3 rounds
+
+    def test_three_rounds_statements_in_order(self) -> None:
+        state, agents = self._state_and_agents()
+        run_day(state, agents, rounds=3)  # type: ignore[arg-type]
+        player_entries = [e for e in state.public_log if e.startswith("Player ")]
+        # First 3 entries are round 1 in seat order
+        assert player_entries[0].startswith("Player 0:")
+        assert player_entries[1].startswith("Player 1:")
+        assert player_entries[2].startswith("Player 2:")
