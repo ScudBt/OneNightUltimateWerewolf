@@ -4,11 +4,13 @@ import re
 from typing import Any, Callable
 
 from onuw.observations import (
+    DrunkSwapped,
     InsomniacWoke,
     LoneWolfPeek,
     Observation,
     Robbed,
     SawWerewolves,
+    SawWerewolvesAsMinion,
     SeerPeekedCenter,
     SeerPeekedPlayer,
     TroublemakerSwapped,
@@ -16,6 +18,7 @@ from onuw.observations import (
 from onuw.roles import Role
 from onuw.state import (
     Action,
+    DrunkSwapAction,
     LoneWolfPeekAction,
     NoAction,
     PrivateView,
@@ -28,36 +31,46 @@ from onuw.state import (
 _GAME_RULES = """\
 GAME RULES — One Night Ultimate Werewolf
 ----------------------------------------
-Players: seated 0 to N-1. There are also 3 center cards (positions N, N+1, N+2).
+Players: seated 0 to N-1. There are also 3 center cards (slots 0, 1, 2 of the center).
 Each player is dealt one role card. Some roles swap cards during the night, so a \
 player's final card may differ from their dealt card.
 
 Night order (roles act in this sequence; skip absent roles):
-  Werewolf → Seer → Robber → Troublemaker → Insomniac
+  Werewolf → Minion → Seer → Robber → Troublemaker → Drunk → Insomniac
 
 Night abilities:
-  Werewolf  : Sees all other Werewolves. Lone wolf may peek one center card.
-  Seer      : Peeks one player's card OR two center cards.
-  Robber    : Swaps own card with one other player's card; sees new card.
+  Werewolf    : Sees all other Werewolves. Lone wolf may peek one center card.
+  Minion      : Sees who the Werewolves are (wolf team; Werewolves do NOT see the Minion).
+  Seer        : Peeks one player's card OR two center cards.
+  Robber      : Swaps own card with one other player's card; sees new card.
   Troublemaker: Swaps two OTHER players' cards without seeing them.
-  Insomniac : After all swaps, wakes and sees own current card.
-  Villager  : No night action.
+  Drunk       : Swaps own card with a chosen center card (does NOT see the new card).
+  Insomniac   : After all swaps, wakes and sees own current card.
+  Villager    : No night action.
 
-Day phase: All players discuss, then simultaneously vote. The player(s) with the
-most votes die — but only if at least 2 players voted for them. If all players are
-tied at exactly 1 vote each, nobody dies.
+Day phase: All players discuss (3 rounds), then simultaneously vote. The player(s) \
+with the most votes die — but only if at least 2 players voted for them. If all \
+players are tied at exactly 1 vote each, nobody dies.
 
 Win conditions (decided by FINAL card, not dealt card):
-  Village wins  : At least one Werewolf dies, OR no Werewolves among players and \
-nobody dies.
-  Werewolves win: Werewolves are among the players and none of them die.
-  No winner     : No Werewolves among players but someone dies anyway."""
+  Village wins    : At least one Werewolf dies, OR no Werewolves among players and \
+nobody dies (Minion also loses).
+  Werewolves win  : Werewolves alive and no Werewolf dies (Minion also wins).
+  Minion special  : If no Werewolves among players, Minion wins only if someone dies.
+  No winner       : No Werewolves or Minion among players but someone dies anyway."""
 
 _ROLE_DESCRIPTIONS: dict[Role, str] = {
     Role.WEREWOLF: (
         "You are on the Werewolf team. You win if no Werewolf is killed. "
         "During the night you learn who the other Werewolves are. "
         "If you are the lone Werewolf, you may also peek one center card."
+    ),
+    Role.MINION: (
+        "You are the Minion, on the Werewolf team. "
+        "During the night you learn who the Werewolves are, but they do not see you. "
+        "You win if no Werewolf is killed. "
+        "If there are no Werewolves among the players, you win only if at least one player dies. "
+        "Bluff hard to protect the wolves and mislead the village."
     ),
     Role.SEER: (
         "You are on the Village team. You win if at least one Werewolf dies. "
@@ -71,6 +84,13 @@ _ROLE_DESCRIPTIONS: dict[Role, str] = {
     Role.TROUBLEMAKER: (
         "You are on the Village team. You win if at least one Werewolf dies. "
         "During the night you swap two other players' cards without seeing them."
+    ),
+    Role.DRUNK: (
+        "You are the Drunk, on the Village team. "
+        "During the night you swapped your card with a center card — "
+        "you do NOT know what your card is now. "
+        "Your win condition follows your final card, which is unknown to you. "
+        "Reason carefully: you might now be a Werewolf without knowing it."
     ),
     Role.INSOMNIAC: (
         "You are on the Village team (unless your final card is Werewolf). "
@@ -123,6 +143,14 @@ def _serialize_observation(obs: Observation, player_count: int) -> str:
         return f"You swapped the cards of Player {obs.target_a} and Player {obs.target_b} (you don't know what they have)."
     if isinstance(obs, InsomniacWoke):
         return f"After all night actions, your card is {obs.final_role.value.upper()}."
+    if isinstance(obs, SawWerewolvesAsMinion):
+        if obs.wolf_positions:
+            wolves = ", ".join(f"Player {p}" for p in obs.wolf_positions)
+            return f"As the Minion you see the Werewolves are: {wolves}."
+        return "As the Minion you see there are no Werewolves among the players."
+    if isinstance(obs, DrunkSwapped):
+        label = _pos_label(obs.center_position, player_count)
+        return f"You swapped your card with {label}. You don't know your new role."
     return str(obs)  # fallback; should never reach
 
 
@@ -191,6 +219,8 @@ def _serialize_action(action: Action, player_count: int) -> str:
         return f"Rob Player {action.target} (swap your card with theirs and learn your new card)."
     if isinstance(action, TroublemakerSwapAction):
         return f"Swap the cards of Player {action.target_a} and Player {action.target_b}."
+    if isinstance(action, DrunkSwapAction):
+        return f"Swap your card with {_pos_label(action.center_position, player_count)} (you won't see your new role)."
     return str(action)  # fallback
 
 

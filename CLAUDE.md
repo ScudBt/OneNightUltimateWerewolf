@@ -59,7 +59,9 @@ Rules that follow from this and must always hold:
 
 ## Phase roadmap (context only — do only the current phase)
 
-- **Phase 0 (current):** deterministic engine + scripted/random agents. No LLM.
-- Phase 1: replace scripted agents with LLM agents, one role at a time.
-- Phase 2: voice I/O (speech-to-text for the human, text-to-speech for agents).
-- Phase 3: status UI presenting per-player/role state.
+- **Phase 0 (done):** deterministic engine + scripted/random agents. No LLM.
+- **Phase 1 (done):** LLM agents (Anthropic + Gemini), one-round discussion, speak/vote.
+- **Phase 2 (current):** playable CLI game — HumanAgent (stdin), Minion + Drunk roles,
+  3-round discussion, 4–7 player presets, end-of-game reveal. Entry point: `cli.py`.
+- Phase 3: voice I/O (speech-to-text for the human, text-to-speech for agents).
+- Phase 4: status UI presenting per-player/role state.
