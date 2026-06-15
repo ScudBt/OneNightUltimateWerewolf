@@ -163,13 +163,29 @@ def _serialize_view(view: PrivateView) -> str:
         or "  (none)"
     )
     return (
-        f"You are Player {view.seat} (dealt role: {view.dealt_role.value.upper()}).\n"
+        f"You are Player {view.seat} (dealt role: {view.dealt_role.value.upper()}). "
+        f"In the discussion log, lines marked 'You (Player {view.seat})' are your "
+        f"OWN earlier statements — do not treat Player {view.seat} as someone else.\n"
         f"Night observations:\n{obs_lines}"
     )
 
 
-def _serialize_log(public_log: list[str]) -> str:
-    return "\n".join(public_log) if public_log else "(nothing yet)"
+def _serialize_log(public_log: list[str], own_seat: int | None = None) -> str:
+    """Render the discussion log. The reader's own lines are relabeled
+    ``You (Player N):`` so small models don't treat their own past statements as
+    a third party's."""
+    if not public_log:
+        return "(nothing yet)"
+    if own_seat is None:
+        return "\n".join(public_log)
+    own_prefix = f"Player {own_seat}:"
+    out: list[str] = []
+    for line in public_log:
+        if line.startswith(own_prefix):
+            out.append(f"You (Player {own_seat}):{line[len(own_prefix):]}")
+        else:
+            out.append(line)
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -193,13 +209,30 @@ def anthropic_caller(client: Any, model: str = "claude-sonnet-4-6") -> LLMCaller
     return _call
 
 
-def gemini_caller(client: Any, model: str = "gemini-2.5-flash-lite") -> LLMCaller:
-    """Return a caller backed by the Google Gemini API."""
+def gemini_caller(
+    client: Any,
+    model: str = "gemini-2.5-flash-lite",
+    thinking_budget: int = 2048,
+) -> LLMCaller:
+    """Return a caller backed by the Google Gemini API.
+
+    Gemini "thinking" models count hidden reasoning tokens against
+    ``max_output_tokens``, so a single cap lets thinking starve the visible
+    reply (truncated/empty output). To keep thinking ON without that, we bound
+    thinking to ``thinking_budget`` and request ``thinking_budget + max_tokens``
+    total — guaranteeing the visible answer always has ``max_tokens`` of room.
+    Here ``max_tokens`` from callers is the *visible* output reserve.
+    """
     def _call(system: str, user: str, max_tokens: int) -> str:
         response = client.models.generate_content(
             model=model,
             contents=user,
-            config={"system_instruction": system, "max_output_tokens": max_tokens},
+            config={
+                "system_instruction": system,
+                "max_output_tokens": max_tokens + thinking_budget,
+                # dict form (SDK auto-converts) avoids importing google.genai.types
+                "thinking_config": {"thinking_budget": thinking_budget},
+            },
         )
         return (response.text or "").strip()
     return _call
@@ -225,12 +258,47 @@ def _serialize_action(action: Action, player_count: int) -> str:
 
 
 def _parse_speak_response(raw: str) -> tuple[str, str]:
-    """Extract (reasoning, statement) from a <reasoning>…</reasoning><statement>…</statement> response."""
+    """Extract (reasoning, statement), tolerating truncated/malformed output.
+
+    Critically, this never surfaces the model's private reasoning (or an echoed
+    prompt) as the public statement: if the response is cut off before the
+    closing ``</statement>`` tag, we still take the open ``<statement>`` content,
+    and if there is no usable statement at all we fall back to a neutral line
+    rather than dumping the raw text (which would leak reasoning into the log and
+    poison every downstream agent that reads it).
+    """
     r = re.search(r"<reasoning>(.*?)</reasoning>", raw, re.DOTALL)
-    s = re.search(r"<statement>(.*?)</statement>", raw, re.DOTALL)
     reasoning = r.group(1).strip() if r else ""
-    statement = s.group(1).strip() if s else raw.strip()
-    return reasoning, statement
+
+    # Accept a <statement> even when its closing tag was truncated away.
+    s = re.search(r"<statement>(.*?)(?:</statement>|\Z)", raw, re.DOTALL)
+    if s and s.group(1).strip():
+        return reasoning, s.group(1).strip()
+
+    # No usable <statement>. If the model emitted any of our format tags, the raw
+    # text is reasoning/preamble — do NOT surface it. Only treat the whole
+    # response as a plain statement when the model ignored the format entirely.
+    if "<reasoning>" in raw or "<statement>" in raw:
+        return reasoning, "I'd rather keep my thoughts to myself for now."
+    return reasoning, raw.strip()
+
+
+def _parse_vote_response(raw: str, targets: list[int]) -> tuple[str, int]:
+    """Extract (reason, target_seat) from a vote response.
+
+    Tolerant of bare-integer replies: prefers a <vote> tag, then the first
+    integer in the text that is a legal target, then falls back to targets[0].
+    """
+    r = re.search(r"<reason>(.*?)</reason>", raw, re.DOTALL)
+    reason = r.group(1).strip() if r else ""
+
+    m = re.search(r"<vote>\s*(\d+)", raw)
+    if m and int(m.group(1)) in targets:
+        return reason, int(m.group(1))
+    for tok in re.findall(r"\d+", raw):
+        if int(tok) in targets:
+            return reason, int(tok)
+    return reason, targets[0]
 
 
 class LLMAgent:
@@ -247,6 +315,8 @@ class LLMAgent:
     def __init__(self, caller: LLMCaller) -> None:
         self._caller = caller
         self.reasoning_log: dict[int, str] = {}
+        # seat -> one-line justification the agent gave for its vote
+        self.vote_reasoning_log: dict[int, str] = {}
 
     def _call(self, role: Role, user_prompt: str, max_tokens: int = 200) -> str:
         return self._caller(_role_system_prompt(role), user_prompt, max_tokens).strip()
@@ -276,15 +346,16 @@ class LLMAgent:
     def speak(self, view: PrivateView, public_log: list[str]) -> str:
         prompt = (
             f"{_serialize_view(view)}\n\n"
-            f"Discussion so far:\n{_serialize_log(list(public_log))}\n\n"
+            f"Discussion so far:\n{_serialize_log(list(public_log), view.seat)}\n\n"
             f"Make ONE public statement for the group (1-2 sentences). "
             f"You may bluff or tell the truth.\n\n"
-            f"Respond in exactly this format:\n"
-            f"<reasoning>2-3 sentences: what you know, what you want others to "
-            f"believe, and why you are saying what you are about to say</reasoning>\n"
+            f"Output ONLY the two tags below, with nothing before <reasoning>. "
+            f"Keep <reasoning> to 2-3 short sentences and always close both tags:\n"
+            f"<reasoning>what you know, what you want others to believe, and why "
+            f"you are about to say what you say</reasoning>\n"
             f"<statement>your public statement to the group</statement>"
         )
-        raw = self._call(view.dealt_role, prompt, max_tokens=400)
+        raw = self._call(view.dealt_role, prompt, max_tokens=600)
         reasoning, statement = _parse_speak_response(raw)
         self.reasoning_log[view.seat] = reasoning
         return statement
@@ -293,15 +364,19 @@ class LLMAgent:
         targets = view.legal_vote_targets()
         prompt = (
             f"{_serialize_view(view)}\n\n"
-            f"Full discussion log:\n{_serialize_log(list(public_log))}\n\n"
+            f"Full discussion log:\n{_serialize_log(list(public_log), view.seat)}\n\n"
             f"Vote to eliminate one player. Legal targets: {', '.join(str(t) for t in targets)}.\n"
-            f"Respond with just the seat number."
+            f"Your <reason> is PRIVATE — shown to the human ONLY after the game ends, "
+            f"so be fully honest here; do NOT write a public bluff. State your true "
+            f"role and team and your real strategic reason for this vote "
+            f"(e.g. \"I'm the Minion protecting the wolves, so I voted out a Villager "
+            f"alongside my werewolf ally\").\n"
+            f"Respond in exactly this format, closing both tags:\n"
+            f"<reason>2-3 honest sentences: your true role/team and why you vote this "
+            f"player</reason>\n"
+            f"<vote>the seat number</vote>"
         )
-        raw = self._call(view.dealt_role, prompt, max_tokens=10)
-        try:
-            target = int(raw.split()[0])
-            if target in targets:
-                return target
-        except (ValueError, IndexError):
-            pass
-        return targets[0]
+        raw = self._call(view.dealt_role, prompt, max_tokens=220)
+        reason, target = _parse_vote_response(raw, targets)
+        self.vote_reasoning_log[view.seat] = reason
+        return target

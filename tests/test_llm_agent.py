@@ -116,12 +116,51 @@ class TestSpeak:
         assert result == "I agree with Player 0."
         assert agent.reasoning_log.get(1, "") == ""
 
+    def test_own_lines_relabeled_in_prompt(self) -> None:
+        """The speaker's own past lines are shown as 'You (Player N)' so the model
+        doesn't refer to itself in the third person (regression: P4 R3)."""
+        captured: list[str] = []
+
+        def caller(system: str, user: str, max_tokens: int) -> str:
+            captured.append(user)
+            return "<reasoning>x</reasoning><statement>ok</statement>"
+
+        agent = LLMAgent(caller)
+        log = ["Player 4: I am the Seer.", "Player 0: I'm a villager."]
+        agent.speak(_minimal_view(seat=4, player_count=5), log)
+        prompt = captured[0]
+        assert "You (Player 4): I am the Seer." in prompt
+        assert "Player 0: I'm a villager." in prompt
+        assert "Player 4: I am the Seer." not in prompt  # the bare form is gone
+
     def test_reasoning_empty_when_tag_missing(self) -> None:
         agent = _make_agent(["<statement>Just a statement.</statement>"])
         view = _minimal_view(seat=0)
         result = agent.speak(view, [])
         assert result == "Just a statement."
         assert agent.reasoning_log.get(0, "") == ""
+
+    def test_truncated_statement_without_closing_tag(self) -> None:
+        """A response cut off before </statement> still yields the open content,
+        never the reasoning/preamble (regression: the leak in game 1)."""
+        raw = (
+            "You are Player 2, dealt the ROBBER role. Strategy: act like a villager."
+            "<reasoning>I am actually the robber and swapped with P1.</reasoning>"
+            "<statement>I'm a Villager and didn't do anything last night"
+        )
+        agent = _make_agent([raw])
+        result = agent.speak(_minimal_view(seat=2), [])
+        assert result == "I'm a Villager and didn't do anything last night"
+        assert "ROBBER" not in result and "<reasoning>" not in result
+
+    def test_reasoning_without_statement_does_not_leak(self) -> None:
+        """If only reasoning survives (statement truncated entirely), fall back to
+        a neutral line rather than dumping private reasoning into the log."""
+        raw = "<reasoning>I am the werewolf and want to frame P0.</reasoning>"
+        agent = _make_agent([raw])
+        result = agent.speak(_minimal_view(seat=3), [])
+        assert "werewolf" not in result.lower()
+        assert agent.reasoning_log[3] == "I am the werewolf and want to frame P0."
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +194,39 @@ class TestVote:
         result = agent.vote(view, [])
         assert result == 3
         assert result in view.legal_vote_targets()
+
+    def test_parses_tagged_vote_and_stores_reason(self) -> None:
+        raw = "<reason>P2 dodged every question.</reason><vote>2</vote>"
+        agent = _make_agent([raw])
+        view = _minimal_view(seat=0, player_count=3)
+        result = agent.vote(view, [])
+        assert result == 2
+        assert agent.vote_reasoning_log[0] == "P2 dodged every question."
+
+    def test_vote_reason_empty_for_bare_integer(self) -> None:
+        agent = _make_agent(["2"])
+        view = _minimal_view(seat=0, player_count=3)
+        assert agent.vote(view, []) == 2
+        assert agent.vote_reasoning_log.get(0, "") == ""
+
+    def test_truncated_vote_uses_first_legal_integer(self) -> None:
+        # closing </vote> truncated away; still recover the seat
+        raw = "<reason>They contradicted themselves.</reason><vote>1"
+        agent = _make_agent([raw])
+        view = _minimal_view(seat=0, player_count=3)
+        assert agent.vote(view, []) == 1
+
+    def test_vote_prompt_requests_honest_private_reasoning(self) -> None:
+        captured: list[str] = []
+
+        def caller(system: str, user: str, max_tokens: int) -> str:
+            captured.append(user)
+            return "<reason>I'm the Minion, voting with my wolf.</reason><vote>1</vote>"
+
+        agent = LLMAgent(caller)
+        agent.vote(_minimal_view(seat=0, player_count=3), [])
+        prompt = captured[0]
+        assert "PRIVATE" in prompt and "honest" in prompt.lower()
 
 
 # ---------------------------------------------------------------------------

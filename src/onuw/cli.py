@@ -15,6 +15,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from onuw._env import load_env
 from onuw.agents import HumanAgent
 from onuw.engine import (
     WAKE_ORDER,
@@ -281,6 +282,7 @@ _DEFAULT_MODELS = {
 
 
 def main() -> None:
+    load_env()  # read ANTHROPIC_API_KEY / GEMINI_API_KEY from repo-root .env
     parser = argparse.ArgumentParser(description="One Night Ultimate Werewolf (CLI)")
     parser.add_argument(
         "--players", type=int, default=5,
