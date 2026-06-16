@@ -52,6 +52,17 @@ async def index() -> FileResponse:
     return FileResponse(_STATIC / "index.html")
 
 
+@app.get("/api/config")
+async def config() -> dict[str, Any]:
+    # The start form initializes from these so the server's launch defaults
+    # (--provider, --model, --no-summaries) are what actually gets sent.
+    return {
+        "provider": app.state.provider,
+        "model": app.state.model,
+        "summaries": app.state.summaries,
+    }
+
+
 def _open_log(seed: int) -> Optional[TextIO]:
     try:
         runs = Path("runs")

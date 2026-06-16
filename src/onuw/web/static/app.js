@@ -535,3 +535,17 @@ $("play-again").onclick = () => {
   $("start-screen").classList.remove("hidden");
   $("start-status").textContent = "";
 };
+
+// Initialize the start form from the server's launch defaults so that
+// --provider / --no-summaries / --model are reflected (and actually sent)
+// rather than overridden by the form's hardcoded HTML defaults.
+fetch("/api/config")
+  .then((r) => r.json())
+  .then((cfg) => {
+    if (cfg.provider) $("provider").value = cfg.provider;
+    $("summaries").checked = !!cfg.summaries;
+    if (cfg.model) {
+      $("model").placeholder = `server default (${cfg.model})`;
+    }
+  })
+  .catch(() => {});

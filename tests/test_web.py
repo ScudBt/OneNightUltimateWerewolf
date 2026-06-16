@@ -400,6 +400,35 @@ class TestModelSelection:
         assert opts.model == server._DEFAULT_MODELS["anthropic"]
 
 
+class TestServerDefaultsFallback:
+    """When the client omits a field, the server's launch defaults apply."""
+
+    def test_provider_falls_back_to_server_default(self) -> None:
+        from onuw.web import server
+        server.app.state.provider = "anthropic"
+        server.app.state.model = server._DEFAULT_MODELS["anthropic"]
+        opts = server._options_from_start({"type": "start_game"})
+        assert opts.provider == "anthropic"
+
+    def test_summaries_falls_back_to_server_default(self) -> None:
+        from onuw.web import server
+        server.app.state.summaries = False
+        opts = server._options_from_start({"type": "start_game"})
+        assert opts.summaries is False
+
+    def test_config_endpoint_reports_server_defaults(self) -> None:
+        from onuw.web import server
+        server.app.state.provider = "anthropic"
+        server.app.state.model = "claude-test"
+        server.app.state.summaries = False
+        body = asyncio.run(server.config())
+        assert body == {
+            "provider": "anthropic",
+            "model": "claude-test",
+            "summaries": False,
+        }
+
+
 class TestSummaries:
     def test_off_emits_none(self) -> None:
         _session, sent = _run_session(summaries=False, caller=_fake_caller)
