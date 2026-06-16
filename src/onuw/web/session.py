@@ -277,10 +277,16 @@ class GameSession:
         personas: dict[int, tuple[str, str]],
     ) -> None:
         self._log("\n--- NIGHT ---")
+        # The narrator calls every role present in the deck (player + center
+        # cards), regardless of whether any player holds it. Suppressing the
+        # call for a role whose copies are all in the center would leak hidden
+        # card locations — e.g. an omitted Werewolf wake proves no player is a
+        # Werewolf. Only the action loop is gated on a role actually being held.
+        deck_roles = set(state.dealt_roles.values())
         for role in WAKE_ORDER:
-            seats = [p for p in state.player_positions() if state.dealt_roles[p] == role]
-            if not seats:
+            if role not in deck_roles:
                 continue
+            seats = [p for p in state.player_positions() if state.dealt_roles[p] == role]
             await self._send(protocol.night_wake(role))
             self._log(f"[Night] The {role.value.upper()} wakes.")
             for seat in seats:

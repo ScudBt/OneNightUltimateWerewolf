@@ -255,6 +255,30 @@ class TestSessionFlow:
             if m["type"] in ("night_wake", "night_sleep"):
                 assert "seat" not in m
 
+    def test_wake_events_cover_every_deck_role_not_just_held(self) -> None:
+        # The narrator must call every waking role in the deck, even when all
+        # its copies are in the center. Suppressing the call would leak hidden
+        # card locations (e.g. an omitted Werewolf wake proves no player holds
+        # one). Seed 0 leaves the Seer and Insomniac entirely in the center.
+        from onuw.engine import WAKE_ORDER
+
+        session, sent = _run_session(summaries=False, seed=0)
+        assert session.state is not None
+        deck_roles = set(session.state.dealt_roles.values())
+        held_roles = {
+            session.state.dealt_roles[p] for p in session.state.player_positions()
+        }
+        expected_wakes = [r.value for r in WAKE_ORDER if r in deck_roles]
+        center_only = [r for r in WAKE_ORDER if r in deck_roles and r not in held_roles]
+        assert center_only, "seed 0 should leave a waking role only in the center"
+
+        woke = [m["role"] for m in sent if m["type"] == "night_wake"]
+        slept = [m["role"] for m in sent if m["type"] == "night_sleep"]
+        assert woke == expected_wakes
+        assert slept == expected_wakes
+        for role in center_only:
+            assert role.value in woke
+
 
 # ---------------------------------------------------------------------------
 # Round summaries (flagged)
