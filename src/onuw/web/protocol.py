@@ -40,7 +40,7 @@ def game_start(
     human_seat: int,
     roster: Sequence[Mapping[str, Any]],
     rounds: int,
-    roles_in_deck: Sequence[str],
+    roles_in_deck: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     # roster entries carry name/avatar/seat only — never a role.
     return {
@@ -131,6 +131,7 @@ def reveal(
     deaths: frozenset[int],
     votes: Mapping[int, int],
     vote_reasons: Mapping[int, str],
+    reactions: Mapping[int, str],
 ) -> dict[str, Any]:
     players = [
         {
@@ -141,6 +142,9 @@ def reveal(
             "dealt_role": dealt[s].value,
             "final_role": final[s].value,
             "died": s in deaths,
+            # In-character reaction to the result; empty for the human, whose
+            # reaction is collected after the reveal via ``human_reaction``.
+            "reaction": reactions.get(s, ""),
         }
         for s in range(player_count)
     ]
@@ -168,6 +172,16 @@ def reveal(
         "human_seat": human_seat,
         "human_won": human_seat in result.winners,
     }
+
+
+def god_summary(text: str) -> dict[str, Any]:
+    # Omniscient post-game narration. Built only after ``evaluate_win`` from
+    # ground truth, so it never crosses the wire before the reveal.
+    return {"type": "god_summary", "text": text}
+
+
+def human_reaction(seat: int, text: str) -> dict[str, Any]:
+    return {"type": "human_reaction", "seat": seat, "text": text}
 
 
 def invalid_input(message: str) -> dict[str, Any]:

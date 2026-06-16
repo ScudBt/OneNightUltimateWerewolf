@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional, Protocol, TextIO
 
@@ -65,6 +66,12 @@ def make_caller(provider: str, model: str) -> LLMCaller:
     return gemini_caller(genai.Client(), model)
 
 
+def _role_counts(roles: tuple[Role, ...]) -> list[dict[str, Any]]:
+    """Public deck composition with counts, e.g. [{"role": "werewolf", "count": 2}]."""
+    counts = Counter(r.value for r in roles)
+    return [{"role": role, "count": counts[role]} for role in sorted(counts)]
+
+
 # ---------------------------------------------------------------------------
 # Human agent backed by the browser (async — does not satisfy the sync Agent
 # protocol; the session calls it directly for the human seat).
@@ -74,6 +81,7 @@ class HumanInterface(Protocol):
     async def night_action(self, view: PrivateView, legal: list[Action]) -> Action: ...
     async def speak(self, view: PrivateView, public_log: list[str]) -> str: ...
     async def vote(self, view: PrivateView, public_log: list[str]) -> int: ...
+    async def react(self) -> str: ...
 
 
 class WebHumanAgent:
@@ -82,6 +90,8 @@ class WebHumanAgent:
     def __init__(self, send: Send, inbound: "asyncio.Queue[dict[str, Any]]") -> None:
         self._send = send
         self._inbound = inbound
+        # The optional free-text reason from the human's most recent vote.
+        self.last_vote_reason: str = ""
 
     async def _next(self) -> dict[str, Any]:
         msg = await self._inbound.get()
@@ -121,8 +131,16 @@ class WebHumanAgent:
             if msg.get("type") == "vote":
                 target = msg.get("seat")
                 if isinstance(target, int) and target in targets:
+                    self.last_vote_reason = str(msg.get("reason", "")).strip()
                     return target
             await self._send(protocol.invalid_input("Pick a valid player to eliminate."))
+
+    async def react(self) -> str:
+        """Await the human's optional one-line reaction on the reveal screen."""
+        while True:
+            msg = await self._next()
+            if msg.get("type") == "reaction":
+                return str(msg.get("text", "")).strip()
 
 
 # ---------------------------------------------------------------------------
@@ -198,6 +216,100 @@ class GameSession:
         # 120 = visible reserve; the caller adds any thinking budget on top.
         return (await asyncio.to_thread(caller, system, user, 120)).strip()
 
+    def _board_lines(
+        self,
+        state: GameState,
+        personas: dict[int, tuple[str, str]],
+        human_seat: int,
+    ) -> str:
+        """Omniscient dealt->final board, flagging every night swap. Post-game only."""
+        lines = []
+        for s in range(state.player_count):
+            dealt = state.dealt_roles[s].value.upper()
+            final = state.current_roles[s].value.upper()
+            you = " (the human)" if s == human_seat else ""
+            if final != dealt:
+                lines.append(
+                    f"P{s} {personas[s][0]}{you}: dealt {dealt}, "
+                    f"but ended as {final} after the night swaps"
+                )
+            else:
+                lines.append(f"P{s} {personas[s][0]}{you}: {final} (never swapped)")
+        return "\n".join(lines)
+
+    async def _god_summary(
+        self,
+        state: GameState,
+        personas: dict[int, tuple[str, str]],
+        votes: dict[int, int],
+        result: GameResult,
+        human_seat: int,
+    ) -> str:
+        """Omniscient narration of what really happened across the whole game."""
+        if self._caller is None:
+            return ""
+        transcript = "\n".join(
+            line for line in state.public_log if not line.startswith("--- Round")
+        )
+        vote_text = "\n".join(
+            f"P{v} {personas[v][0]} voted for P{votes[v]} ({personas[votes[v]][0]})"
+            for v in sorted(votes)
+        )
+        winners = ", ".join(f"P{w}" for w in sorted(result.winners)) or "nobody"
+        system = (
+            "You are the omniscient game master of a One Night Ultimate Werewolf "
+            "game. You alone know every player's true dealt and final card and what "
+            "each player privately knew. Narrate what REALLY happened in 3-5 short "
+            "sentences: who bluffed a role they never held, who was confounded by a "
+            "night swap they never realized, who over-claimed or contradicted "
+            "themselves and got busted, and how that shaped the vote. Refer to "
+            "players by name. Be concrete and a little dramatic; never invent facts "
+            "outside the ground truth given."
+        )
+        user = (
+            f"GROUND TRUTH (cards):\n{self._board_lines(state, personas, human_seat)}\n\n"
+            f"PUBLIC DISCUSSION:\n{transcript}\n\n"
+            f"VOTES:\n{vote_text}\n\n"
+            f"OUTCOME: {result.outcome.value}. Winners: {winners}.\n\n"
+            f"Now narrate what really happened:"
+        )
+        caller = self._caller
+        return (await asyncio.to_thread(caller, system, user, 280)).strip()
+
+    async def _npc_reactions(
+        self,
+        state: GameState,
+        personas: dict[int, tuple[str, str]],
+        votes: dict[int, int],
+        result: GameResult,
+        human_seat: int,
+    ) -> dict[int, str]:
+        """One short in-character reaction per NPC, now that the truth is out."""
+        if self._caller is None:
+            return {}
+        caller = self._caller
+        board = self._board_lines(state, personas, human_seat)
+        reactions: dict[int, str] = {}
+        for s in state.player_positions():
+            if s == human_seat:
+                continue
+            won = s in result.winners
+            system = (
+                f"You are {personas[s][0]}, a player in One Night Ultimate Werewolf. "
+                f"Your card ended as {state.current_roles[s].value.upper()} "
+                f"(dealt {state.dealt_roles[s].value.upper()}). The game is over and "
+                f"all cards are now revealed to you. React to the result in ONE short, "
+                f"emotional first-person line (max 15 words), e.g. \"Knew it!\" or "
+                f"\"Robbed — should've trusted Mona.\" Stay in character; no analysis."
+            )
+            user = (
+                f"Final board (now revealed):\n{board}\n\n"
+                f"You voted for P{votes[s]} ({personas[votes[s]][0]}). "
+                f"Your team {'WON' if won else 'LOST'}.\n\nYour one-line reaction:"
+            )
+            reactions[s] = (await asyncio.to_thread(caller, system, user, 60)).strip()
+        return reactions
+
     # -- main loop --------------------------------------------------------
 
     async def run(self) -> None:
@@ -234,7 +346,7 @@ class GameSession:
                 human_seat=human_seat,
                 roster=roster,
                 rounds=TOTAL_ROUNDS,
-                roles_in_deck=sorted({r.value for r in roles}),
+                roles_in_deck=_role_counts(roles),
             )
         )
         human_role = state.dealt_roles[human_seat]
@@ -374,6 +486,7 @@ class GameSession:
             view = build_private_view(state, seat)
             if seat == human_seat:
                 votes[seat] = await human.vote(view, list(state.public_log))
+                vote_reasons[seat] = getattr(human, "last_vote_reason", "")
             else:
                 agent = agents[seat]
                 votes[seat] = await asyncio.to_thread(
@@ -395,6 +508,9 @@ class GameSession:
         deaths = resolve_vote(votes)
         result = evaluate_win(state, deaths)
         self.result = result
+        reactions = await self._npc_reactions(
+            state, personas, votes, result, human_seat
+        )
         await self._send(
             protocol.reveal(
                 player_count=state.player_count,
@@ -406,6 +522,7 @@ class GameSession:
                 deaths=deaths,
                 votes=votes,
                 vote_reasons=vote_reasons,
+                reactions=reactions,
             )
         )
         self._log("\n--- REVEAL ---")
@@ -427,3 +544,20 @@ class GameSession:
             ", ".join(f"P{w}" for w in sorted(result.winners)) or "(none)"
         ))
         self._log("Result for you: " + ("WON" if human_seat in result.winners else "LOST"))
+
+        if reactions:
+            self._log("\n--- REACTIONS ---")
+            for s in sorted(reactions):
+                self._log(f"  P{s} {personas[s][0]}: {reactions[s]}")
+
+        god = await self._god_summary(state, personas, votes, result, human_seat)
+        if god:
+            await self._send(protocol.god_summary(god))
+            self._log("\n--- GOD VIEW ---")
+            self._log(god)
+
+        # Optional closing reaction from the human, collected on the reveal screen.
+        reaction = await human.react()
+        if reaction:
+            await self._send(protocol.human_reaction(human_seat, reaction))
+            self._log(f"\nYour reaction (P{human_seat}): {reaction}")

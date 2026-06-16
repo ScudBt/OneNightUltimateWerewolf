@@ -359,3 +359,48 @@ button.primary:active { transform: translateY(1px); }
   color: var(--muted);
   font-style: italic;
 }
+
+/* Optional reason field on the human's vote prompt. */
+.vote-reason-input { flex: 1; min-width: 200px; }
+
+/* Per-player end-of-game reactions on the reveal cards. */
+.reveal-card .reaction {
+  margin-top: 8px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--accent-2);
+  line-height: 1.3;
+}
+.reveal-card .reaction.muted { color: var(--muted); }
+.reaction-edit { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.reaction-edit .reaction-input { font-size: 12px; width: 100%; }
+.reaction-edit .reaction-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--accent-2);
+  cursor: pointer;
+}
+.reaction-edit .reaction-btn:hover { border-color: var(--accent); }
+.reaction-edit .reaction-btn.skip { color: var(--muted); }
+
+/* God-view: omniscient recap of the whole game. */
+.god-panel {
+  max-width: 620px;
+  margin: 0 auto 26px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 14px 18px;
+  text-align: left;
+}
+.god-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--gold);
+  margin: 0 0 8px;
+}
+.reveal-god { margin: 0; line-height: 1.5; color: var(--text, var(--accent-2)); }

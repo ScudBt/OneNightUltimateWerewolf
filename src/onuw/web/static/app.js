@@ -193,10 +193,14 @@ function promptSpeak() {
 function promptVote(targets) {
   showInputBar((bar) => {
     bar.appendChild(el("div", "prompt", "Vote to eliminate:"));
+    const reason = el("input", "vote-reason-input");
+    reason.type = "text";
+    reason.placeholder = "Why? (optional — recorded for analysis)";
+    bar.appendChild(reason);
     targets.forEach((seat) => {
       const btn = el("button", "target-btn", `${nameFor(seat)} (P${seat})`);
       btn.onclick = () => {
-        send({ type: "vote", seat: seat });
+        send({ type: "vote", seat: seat, reason: reason.value.trim() });
         clearInputBar();
       };
       bar.appendChild(btn);
@@ -222,7 +226,8 @@ const handlers = {
     const deck = $("deck-list");
     deck.innerHTML = "";
     m.roles_in_deck.forEach((r) => {
-      deck.appendChild(el("span", "deck-chip", `${ROLE_EMOJI[r] || ""} ${r}`));
+      const label = r.count > 1 ? `${r.role} ×${r.count}` : r.role;
+      deck.appendChild(el("span", "deck-chip", `${ROLE_EMOJI[r.role] || ""} ${label}`));
     });
   },
 
@@ -304,6 +309,15 @@ const handlers = {
     renderReveal(m);
   },
 
+  god_summary(m) {
+    $("reveal-god").textContent = m.text;
+    $("god-panel").classList.remove("hidden");
+  },
+
+  human_reaction(m) {
+    // Server echo of the saved reaction; the card was already updated locally.
+  },
+
   error(m) {
     // Surface on whichever screen is currently visible.
     if (!$("start-screen").classList.contains("hidden")) {
@@ -314,9 +328,35 @@ const handlers = {
   },
 };
 
+// The human's own reaction: an editable line on their reveal card. Sent once,
+// then frozen into a static reaction so the record matches what was logged.
+function buildReactionInput(seat) {
+  const wrap = el("div", "reaction-edit");
+  const input = el("input", "reaction-input");
+  input.type = "text";
+  input.placeholder = "Your reaction? (optional)";
+  const submit = (text) => {
+    send({ type: "reaction", text: text });
+    wrap.replaceWith(text ? el("div", "reaction", `“${text}”`) : el("div", "reaction muted", "—"));
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submit(input.value.trim());
+  });
+  const sendBtn = el("button", "reaction-btn", "Save");
+  sendBtn.onclick = () => submit(input.value.trim());
+  const skipBtn = el("button", "reaction-btn skip", "Skip");
+  skipBtn.onclick = () => submit("");
+  wrap.appendChild(input);
+  wrap.appendChild(sendBtn);
+  wrap.appendChild(skipBtn);
+  return wrap;
+}
+
 function renderReveal(m) {
   $("game-screen").classList.add("hidden");
   $("reveal-screen").classList.remove("hidden");
+  $("god-panel").classList.add("hidden");
+  $("reveal-god").textContent = "";
 
   const out = $("reveal-outcome");
   out.textContent = m.human_won ? "You won! " + m.outcome_label : "You lost — " + m.outcome_label;
@@ -340,6 +380,11 @@ function renderReveal(m) {
     }
     if (p.died) card.appendChild(el("div", "badge dead", "✗ dead"));
     else if (isWinner) card.appendChild(el("div", "badge win", "win"));
+    if (p.is_human) {
+      card.appendChild(buildReactionInput(p.seat));
+    } else if (p.reaction) {
+      card.appendChild(el("div", "reaction", `“${p.reaction}”`));
+    }
     box.appendChild(card);
   }
 

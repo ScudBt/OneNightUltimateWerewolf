@@ -42,8 +42,12 @@ def _fake_caller(system: str, user: str, max_tokens: int) -> str:
 class AutoHuman:
     """Async human interface that plays at random (for headless full games)."""
 
-    def __init__(self, rng: random.Random) -> None:
+    def __init__(
+        self, rng: random.Random, *, vote_reason: str = "", reaction: str = ""
+    ) -> None:
         self._r = RandomAgent(rng)
+        self.last_vote_reason = vote_reason
+        self._reaction = reaction
 
     async def night_action(self, view: PrivateView, legal: list[Any]) -> Any:
         return self._r.night_action(view, legal)
@@ -54,14 +58,21 @@ class AutoHuman:
     async def vote(self, view: PrivateView, public_log: list[str]) -> int:
         return self._r.vote(view, public_log)
 
+    async def react(self) -> str:
+        return self._reaction
+
 
 def _factory(seat: int, role: Role) -> RandomAgent:
     return RandomAgent(random.Random(1000 + seat))
 
 
-def _run_session(*, summaries: bool, caller: Any = None, seed: int = 42) -> tuple[
-    GameSession, list[dict[str, Any]]
-]:
+def _run_session(
+    *,
+    summaries: bool,
+    caller: Any = None,
+    seed: int = 42,
+    human: Any = None,
+) -> tuple[GameSession, list[dict[str, Any]]]:
     sent: list[dict[str, Any]] = []
 
     async def send(msg: dict[str, Any]) -> None:
@@ -75,7 +86,7 @@ def _run_session(*, summaries: bool, caller: Any = None, seed: int = 42) -> tupl
             GameOptions(player_count=5, seed=seed, summaries=summaries),
             caller=caller,
             agent_factory=_factory,
-            human_agent=AutoHuman(random.Random(7)),
+            human_agent=human or AutoHuman(random.Random(7)),
         )
         await session.run()
         return session
@@ -144,6 +155,22 @@ class TestWebHumanAgent:
         assert asyncio.run(agent.vote(_view(seat=0, player_count=5), [])) == 2
         assert any(m["type"] == "invalid_input" for m in sent)
 
+    def test_vote_captures_optional_reason(self) -> None:
+        agent, _q, _sent = self._make(
+            [{"type": "vote", "seat": 3, "reason": "  shifty story  "}]
+        )
+        assert asyncio.run(agent.vote(_view(seat=0, player_count=5), [])) == 3
+        assert agent.last_vote_reason == "shifty story"
+
+    def test_vote_without_reason_is_empty(self) -> None:
+        agent, _q, _sent = self._make([{"type": "vote", "seat": 3}])
+        asyncio.run(agent.vote(_view(seat=0, player_count=5), []))
+        assert agent.last_vote_reason == ""
+
+    def test_react_returns_text(self) -> None:
+        agent, _q, _sent = self._make([{"type": "reaction", "text": "  knew it!  "}])
+        assert asyncio.run(agent.react()) == "knew it!"
+
 
 # ---------------------------------------------------------------------------
 # Personas
@@ -179,6 +206,13 @@ class TestSessionFlow:
         for p in reveal["players"]:
             assert p["final_role"] == session.state.current_roles[p["seat"]].value
             assert p["dealt_role"] == session.state.dealt_roles[p["seat"]].value
+
+    def test_game_start_reports_role_counts(self) -> None:
+        _session, sent = _run_session(summaries=False)
+        gs = [m for m in sent if m["type"] == "game_start"][0]
+        deck = {r["role"]: r["count"] for r in gs["roles_in_deck"]}
+        assert deck["werewolf"] == 2  # 5-player preset has two wolves
+        assert all(c >= 1 for c in deck.values())
 
     def test_reproducible(self) -> None:
         s1, e1 = _run_session(summaries=False)
@@ -224,6 +258,53 @@ class TestSessionFlow:
         reveal = [m for m in sent if m["type"] == "reveal"][0]
         npc_reasons = [v["reason"] for v in reveal["votes"] if not v["is_human"]]
         assert npc_reasons and all(r == "they seemed shifty" for r in npc_reasons)
+
+    def test_human_vote_reason_reaches_reveal(self) -> None:
+        human = AutoHuman(random.Random(7), vote_reason="they bluffed Seer")
+        session, sent = _run_session(summaries=False, human=human)
+        reveal = [m for m in sent if m["type"] == "reveal"][0]
+        human_vote = [v for v in reveal["votes"] if v["is_human"]][0]
+        assert human_vote["reason"] == "they bluffed Seer"
+
+    def test_god_summary_emitted_with_caller_after_reveal(self) -> None:
+        _session, sent = _run_session(summaries=False, caller=_fake_caller)
+        types = [m["type"] for m in sent]
+        assert "god_summary" in types
+        god = [m for m in sent if m["type"] == "god_summary"][0]
+        assert god["text"] == "a neutral recap"
+        # God view is omniscient, so it must never precede the reveal.
+        assert types.index("god_summary") > types.index("reveal")
+
+    def test_god_summary_skipped_without_caller(self) -> None:
+        _session, sent = _run_session(summaries=False, caller=None)
+        assert not any(m["type"] == "god_summary" for m in sent)
+
+    def test_npc_reactions_populated_with_caller(self) -> None:
+        session, sent = _run_session(summaries=False, caller=_fake_caller)
+        reveal = [m for m in sent if m["type"] == "reveal"][0]
+        human_seat = session.human_seat
+        for p in reveal["players"]:
+            if p["seat"] == human_seat:
+                assert p["reaction"] == ""  # human reacts after the reveal
+            else:
+                assert p["reaction"] == "a neutral recap"
+
+    def test_npc_reactions_empty_without_caller(self) -> None:
+        _session, sent = _run_session(summaries=False, caller=None)
+        reveal = [m for m in sent if m["type"] == "reveal"][0]
+        assert all(p["reaction"] == "" for p in reveal["players"])
+
+    def test_human_reaction_event_emitted(self) -> None:
+        human = AutoHuman(random.Random(7), reaction="robbed by Mona!")
+        session, sent = _run_session(summaries=False, human=human)
+        hr = [m for m in sent if m["type"] == "human_reaction"]
+        assert len(hr) == 1
+        assert hr[0]["seat"] == session.human_seat
+        assert hr[0]["text"] == "robbed by Mona!"
+
+    def test_empty_human_reaction_emits_no_event(self) -> None:
+        _session, sent = _run_session(summaries=False, human=AutoHuman(random.Random(7)))
+        assert not any(m["type"] == "human_reaction" for m in sent)
 
     def test_no_role_leak_before_reveal(self) -> None:
         session, sent = _run_session(summaries=False)
