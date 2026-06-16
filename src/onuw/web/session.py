@@ -493,9 +493,14 @@ class GameSession:
 
         async def _npc_vote(seat: int) -> int:
             view = build_private_view(state, seat)
-            return await asyncio.to_thread(
+            target = await asyncio.to_thread(
                 agents[seat].vote, view, list(state.public_log)
             )
+            if target not in view.legal_vote_targets():
+                raise ValueError(
+                    f"Seat {seat} cast illegal vote for {target!r}"
+                )
+            return target
 
         npc_task = asyncio.gather(*(_npc_vote(s) for s in npc_seats))
 
