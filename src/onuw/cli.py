@@ -15,6 +15,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from onuw._env import load_env
 from onuw.agents import HumanAgent
 from onuw.engine import (
     WAKE_ORDER,
@@ -153,10 +154,14 @@ def run_game(player_count: int, seed: int, provider: str, model: str, log_file: 
     _sep("NIGHT")
     print("Night falls. All players close their eyes.\n")
 
+    # Call every role in the deck (player + center cards), even when all its
+    # copies are in the center, so the narration never leaks hidden card
+    # locations. Only the action loop is gated on a player actually holding it.
+    deck_roles = set(state.dealt_roles.values())
     for role in WAKE_ORDER:
-        seats_with_role = [p for p in state.player_positions() if state.dealt_roles[p] == role]
-        if not seats_with_role:
+        if role not in deck_roles:
             continue
+        seats_with_role = [p for p in state.player_positions() if state.dealt_roles[p] == role]
 
         role_label = _role_name(role)
         print(f"[The {role_label} wakes...]")
@@ -281,6 +286,7 @@ _DEFAULT_MODELS = {
 
 
 def main() -> None:
+    load_env()  # read ANTHROPIC_API_KEY / GEMINI_API_KEY from repo-root .env
     parser = argparse.ArgumentParser(description="One Night Ultimate Werewolf (CLI)")
     parser.add_argument(
         "--players", type=int, default=5,

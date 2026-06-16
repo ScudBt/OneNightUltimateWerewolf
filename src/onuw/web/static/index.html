@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>One Night Ultimate Werewolf</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <!-- Start screen -->
+  <section id="start-screen" class="screen">
+    <div class="start-card">
+      <div class="moon">🌙</div>
+      <h1>One Night Ultimate Werewolf</h1>
+      <p class="tagline">One night. One murder. No second chances.</p>
+      <label class="field">
+        Players
+        <select id="player-count">
+          <option value="4">4 players</option>
+          <option value="5" selected>5 players</option>
+          <option value="6">6 players</option>
+          <option value="7">7 players</option>
+        </select>
+      </label>
+      <label class="field">
+        Opponents (LLM)
+        <select id="provider">
+          <option value="gemini" selected>Gemini</option>
+          <option value="anthropic">Claude</option>
+        </select>
+      </label>
+      <label class="field">
+        Model (optional)
+        <input id="model" type="text" placeholder="server default (e.g. gemini-3.5-flash)" />
+      </label>
+      <label class="field">
+        Seed (optional)
+        <input id="seed" type="number" placeholder="random" />
+      </label>
+      <label class="field checkbox">
+        <input id="summaries" type="checkbox" checked /> Round summaries
+      </label>
+      <button id="start-btn" class="primary">Begin the night</button>
+      <p id="start-status" class="status"></p>
+    </div>
+  </section>
+
+  <!-- Game screen -->
+  <section id="game-screen" class="screen hidden">
+    <header id="phase-banner">
+      <span id="phase-text">Setting up…</span>
+      <span id="seed-tag" class="seed-tag"></span>
+    </header>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <div id="you-panel" class="panel you-panel">
+          <h2 class="panel-toggle">You <span class="chevron">▾</span></h2>
+          <div class="panel-body">
+            <div id="you-card" class="role-card"></div>
+            <ul id="you-observations" class="obs-list"></ul>
+          </div>
+        </div>
+        <div id="players-panel" class="panel">
+          <h2 class="panel-toggle">Players <span class="chevron">▾</span></h2>
+          <div class="panel-body">
+            <ul id="roster" class="roster"></ul>
+          </div>
+        </div>
+        <div id="deck-panel" class="panel">
+          <h2 class="panel-toggle">Roles in play <span class="chevron">▾</span></h2>
+          <div class="panel-body">
+            <div id="deck-list" class="deck-list"></div>
+          </div>
+        </div>
+        <div id="night-order-panel" class="panel">
+          <h2 class="panel-toggle">Night order <span class="chevron">▾</span></h2>
+          <div class="panel-body">
+            <ol id="night-order" class="night-order"></ol>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div id="narration" class="narration"></div>
+        <div id="transcript" class="transcript"></div>
+      </main>
+    </div>
+
+    <footer id="input-bar" class="input-bar hidden"></footer>
+  </section>
+
+  <!-- Reveal screen -->
+  <section id="reveal-screen" class="screen hidden">
+    <div class="reveal-inner">
+      <h1 id="reveal-outcome"></h1>
+      <p id="reveal-reason" class="reveal-reason"></p>
+      <div id="reveal-cards" class="reveal-cards"></div>
+      <section id="god-panel" class="god-panel hidden">
+        <h2 class="god-title">🔮 What really happened</h2>
+        <p id="reveal-god" class="reveal-god"></p>
+      </section>
+      <h2 class="votes-title">Who voted whom</h2>
+      <div id="reveal-votes" class="reveal-votes"></div>
+      <button id="play-again" class="primary">Play again</button>
+    </div>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

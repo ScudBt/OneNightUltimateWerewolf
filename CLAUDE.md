@@ -33,6 +33,9 @@ Rules that follow from this and must always hold:
 - Use `dataclasses` and `enum.Enum`. Type-annotate everything; code should pass
   `mypy --strict` if run.
 - Environment managed with `uv` (preferred) or a plain `venv`.
+- **API keys** (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) live in the repo-root
+  `.env` (gitignored) and are auto-loaded via `onuw._env.load_env()`. Never ask
+  the user to paste a key in the terminal; always rely on `.env`.
 
 ## Conventions
 
@@ -44,7 +47,9 @@ Rules that follow from this and must always hold:
   action's effect on both card state and observations, the ordering
   interactions between actions, vote-resolution edge cases, and each
   win-condition branch.
-- Run tests with `pytest -q`. All tests must pass before a task is "done".
+- Run tests with `uv run pytest -q` (bare `pytest`/`python` are not on PATH;
+  use `uv run`, or `.venv/bin/pytest` if not using `uv`). All tests must pass
+  before a task is "done".
 
 ## How to work on this repo
 
