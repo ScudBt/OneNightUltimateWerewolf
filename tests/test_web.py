@@ -280,19 +280,27 @@ class TestSessionFlow:
         assert not any(m["type"] == "god_summary" for m in sent)
 
     def test_npc_reactions_populated_with_caller(self) -> None:
+        # Reactions are now streamed in a separate message after the reveal,
+        # so the end screen need not block on the per-NPC LLM calls.
         session, sent = _run_session(summaries=False, caller=_fake_caller)
+        types = [m["type"] for m in sent]
         reveal = [m for m in sent if m["type"] == "reveal"][0]
+        reactions = [m for m in sent if m["type"] == "reactions"][0]
+        # The reveal must be sent before reactions are computed.
+        assert types.index("reveal") < types.index("reactions")
+        # The reveal payload itself no longer carries any reaction text.
+        assert all(p["reaction"] == "" for p in reveal["players"])
         human_seat = session.human_seat
-        for p in reveal["players"]:
-            if p["seat"] == human_seat:
-                assert p["reaction"] == ""  # human reacts after the reveal
-            else:
-                assert p["reaction"] == "a neutral recap"
+        reacted = {r["seat"]: r["text"] for r in reactions["reactions"]}
+        assert human_seat not in reacted  # human reacts after the reveal
+        assert reacted  # every NPC seat is present
+        assert all(text == "a neutral recap" for text in reacted.values())
 
     def test_npc_reactions_empty_without_caller(self) -> None:
         _session, sent = _run_session(summaries=False, caller=None)
         reveal = [m for m in sent if m["type"] == "reveal"][0]
         assert all(p["reaction"] == "" for p in reveal["players"])
+        assert not any(m["type"] == "reactions" for m in sent)
 
     def test_human_reaction_event_emitted(self) -> None:
         human = AutoHuman(random.Random(7), reaction="robbed by Mona!")

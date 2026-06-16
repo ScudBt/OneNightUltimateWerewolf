@@ -174,6 +174,18 @@ def reveal(
     }
 
 
+def reactions(reactions: Mapping[int, str]) -> dict[str, Any]:
+    # Streamed in after ``reveal`` so the end screen need not block on the
+    # per-NPC LLM calls. Each entry fills the reaction line on an existing
+    # reveal card. Built only after ``evaluate_win`` from ground truth.
+    return {
+        "type": "reactions",
+        "reactions": [
+            {"seat": s, "text": t} for s, t in sorted(reactions.items())
+        ],
+    }
+
+
 def god_summary(text: str) -> dict[str, Any]:
     # Omniscient post-game narration. Built only after ``evaluate_win`` from
     # ground truth, so it never crosses the wire before the reveal.

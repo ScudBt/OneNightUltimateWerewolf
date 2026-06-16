@@ -309,6 +309,22 @@ const handlers = {
     renderReveal(m);
   },
 
+  reactions(m) {
+    const box = $("reveal-cards");
+    for (const r of m.reactions) {
+      const card = box.querySelector(`[data-seat="${r.seat}"]`);
+      if (!card) continue;
+      const slot = card.querySelector(".reaction.pending");
+      if (r.text) {
+        const line = el("div", "reaction", `“${r.text}”`);
+        if (slot) slot.replaceWith(line);
+        else card.appendChild(line);
+      } else if (slot) {
+        slot.remove();
+      }
+    }
+  },
+
   god_summary(m) {
     $("reveal-god").textContent = m.text;
     $("god-panel").classList.remove("hidden");
@@ -372,6 +388,7 @@ function renderReveal(m) {
   for (const p of m.players) {
     const isWinner = m.winners.includes(p.seat);
     const card = el("div", "reveal-card" + (p.died ? " died" : "") + (isWinner ? " winner" : ""));
+    card.dataset.seat = p.seat;
     card.appendChild(makeArt(p.final_role));
     card.appendChild(el("div", "who", p.is_human ? `${p.name} (P${p.seat})` : `${p.name} · P${p.seat}`));
     card.appendChild(el("div", "final", p.final_role.toUpperCase()));
@@ -384,6 +401,9 @@ function renderReveal(m) {
       card.appendChild(buildReactionInput(p.seat));
     } else if (p.reaction) {
       card.appendChild(el("div", "reaction", `“${p.reaction}”`));
+    } else {
+      // Placeholder filled in when the streamed `reactions` message arrives.
+      card.appendChild(el("div", "reaction pending", "…"));
     }
     box.appendChild(card);
   }

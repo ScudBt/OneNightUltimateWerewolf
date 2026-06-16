@@ -5,11 +5,12 @@ import asyncio
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, TextIO
+from typing import Any, Awaitable, Callable, Optional, TextIO
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 
 from onuw._env import load_env
 from onuw.presets import PRESETS
@@ -33,6 +34,17 @@ app.state.model = _DEFAULT_MODELS["gemini"]
 app.state.summaries = True
 
 app.mount("/static", StaticFiles(directory=_STATIC), name="static")
+
+
+@app.middleware("http")
+async def _no_cache(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    # Local single-player dev server: never let the browser serve stale JS/CSS
+    # (a cached app.js was rendering deck entries as "[object Object]").
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
 
 
 @app.get("/")

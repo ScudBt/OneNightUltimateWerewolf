@@ -289,10 +289,9 @@ class GameSession:
             return {}
         caller = self._caller
         board = self._board_lines(state, personas, human_seat)
-        reactions: dict[int, str] = {}
-        for s in state.player_positions():
-            if s == human_seat:
-                continue
+        seats = [s for s in state.player_positions() if s != human_seat]
+
+        async def _react(s: int) -> str:
             won = s in result.winners
             system = (
                 f"You are {personas[s][0]}, a player in One Night Ultimate Werewolf. "
@@ -307,8 +306,11 @@ class GameSession:
                 f"You voted for P{votes[s]} ({personas[votes[s]][0]}). "
                 f"Your team {'WON' if won else 'LOST'}.\n\nYour one-line reaction:"
             )
-            reactions[s] = (await asyncio.to_thread(caller, system, user, 60)).strip()
-        return reactions
+            return (await asyncio.to_thread(caller, system, user, 60)).strip()
+
+        # Independent per-NPC calls; fire them concurrently.
+        texts = await asyncio.gather(*(_react(s) for s in seats))
+        return dict(zip(seats, texts))
 
     # -- main loop --------------------------------------------------------
 
@@ -482,18 +484,31 @@ class GameSession:
     ) -> None:
         votes: dict[int, int] = {}
         vote_reasons: dict[int, str] = {}
-        for seat in state.player_positions():
+
+        # NPC votes are independent of one another (none is appended to the
+        # public log during collection), so we fire them concurrently instead
+        # of one round-trip at a time. They are also kicked off before awaiting
+        # the human's vote, so they overlap with the human's thinking time.
+        npc_seats = [s for s in state.player_positions() if s != human_seat]
+
+        async def _npc_vote(seat: int) -> int:
             view = build_private_view(state, seat)
-            if seat == human_seat:
-                votes[seat] = await human.vote(view, list(state.public_log))
-                vote_reasons[seat] = getattr(human, "last_vote_reason", "")
-            else:
-                agent = agents[seat]
-                votes[seat] = await asyncio.to_thread(
-                    agent.vote, view, list(state.public_log)
-                )
-                if isinstance(agent, LLMAgent):
-                    vote_reasons[seat] = agent.vote_reasoning_log.get(seat, "")
+            return await asyncio.to_thread(
+                agents[seat].vote, view, list(state.public_log)
+            )
+
+        npc_task = asyncio.gather(*(_npc_vote(s) for s in npc_seats))
+
+        human_view = build_private_view(state, human_seat)
+        votes[human_seat] = await human.vote(human_view, list(state.public_log))
+        vote_reasons[human_seat] = getattr(human, "last_vote_reason", "")
+
+        npc_votes = await npc_task
+        for seat, vote in zip(npc_seats, npc_votes):
+            votes[seat] = vote
+            agent = agents[seat]
+            if isinstance(agent, LLMAgent):
+                vote_reasons[seat] = agent.vote_reasoning_log.get(seat, "")
         await self._send(protocol.votes_revealed(votes))
         self._log("\n--- VOTES ---")
         for voter in sorted(votes):
@@ -508,9 +523,9 @@ class GameSession:
         deaths = resolve_vote(votes)
         result = evaluate_win(state, deaths)
         self.result = result
-        reactions = await self._npc_reactions(
-            state, personas, votes, result, human_seat
-        )
+        # Send the reveal screen the instant the (deterministic) result is known,
+        # without waiting on the NPC-reaction and god-view LLM calls. Reactions
+        # are streamed in afterward via a separate ``reactions`` message.
         await self._send(
             protocol.reveal(
                 player_count=state.player_count,
@@ -522,7 +537,7 @@ class GameSession:
                 deaths=deaths,
                 votes=votes,
                 vote_reasons=vote_reasons,
-                reactions=reactions,
+                reactions={},
             )
         )
         self._log("\n--- REVEAL ---")
@@ -545,12 +560,18 @@ class GameSession:
         ))
         self._log("Result for you: " + ("WON" if human_seat in result.winners else "LOST"))
 
+        # Reactions and god-view are independent post-game LLM calls; run them
+        # concurrently and stream each in as it lands.
+        reactions, god = await asyncio.gather(
+            self._npc_reactions(state, personas, votes, result, human_seat),
+            self._god_summary(state, personas, votes, result, human_seat),
+        )
         if reactions:
+            await self._send(protocol.reactions(reactions))
             self._log("\n--- REACTIONS ---")
             for s in sorted(reactions):
                 self._log(f"  P{s} {personas[s][0]}: {reactions[s]}")
 
-        god = await self._god_summary(state, personas, votes, result, human_seat)
         if god:
             await self._send(protocol.god_summary(god))
             self._log("\n--- GOD VIEW ---")

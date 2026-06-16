@@ -3,7 +3,10 @@
     "allow": [
       "Bash(uv add *)",
       "Bash(uv pip *)",
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "Bash(curl -s http://127.0.0.1:8137/)",
+      "Bash(curl -s http://127.0.0.1:8137/static/app.js)",
+      "Bash(curl -s http://127.0.0.1:8137/static/styles.css)"
     ]
   }
 }
