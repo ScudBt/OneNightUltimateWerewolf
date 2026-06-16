@@ -55,17 +55,29 @@
     <div class="layout">
       <aside class="sidebar">
         <div id="you-panel" class="panel you-panel">
-          <h2>You</h2>
-          <div id="you-card" class="role-card"></div>
-          <ul id="you-observations" class="obs-list"></ul>
+          <h2 class="panel-toggle">You <span class="chevron">▾</span></h2>
+          <div class="panel-body">
+            <div id="you-card" class="role-card"></div>
+            <ul id="you-observations" class="obs-list"></ul>
+          </div>
         </div>
         <div id="players-panel" class="panel">
-          <h2>Players</h2>
-          <ul id="roster" class="roster"></ul>
+          <h2 class="panel-toggle">Players <span class="chevron">▾</span></h2>
+          <div class="panel-body">
+            <ul id="roster" class="roster"></ul>
+          </div>
         </div>
         <div id="deck-panel" class="panel">
-          <h2>Roles in play</h2>
-          <div id="deck-list" class="deck-list"></div>
+          <h2 class="panel-toggle">Roles in play <span class="chevron">▾</span></h2>
+          <div class="panel-body">
+            <div id="deck-list" class="deck-list"></div>
+          </div>
+        </div>
+        <div id="night-order-panel" class="panel">
+          <h2 class="panel-toggle">Night order <span class="chevron">▾</span></h2>
+          <div class="panel-body">
+            <ol id="night-order" class="night-order"></ol>
+          </div>
         </div>
       </aside>
 

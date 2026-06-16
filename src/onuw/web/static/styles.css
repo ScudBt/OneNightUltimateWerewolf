@@ -130,8 +130,22 @@ button.primary:active { transform: translateY(1px); }
   margin: 0 0 12px;
 }
 
-/* You panel */
-.you-panel { position: sticky; top: 70px; }
+/* Collapsible panel headers (shared by every sidebar panel) */
+.panel-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+}
+.panel-toggle .chevron {
+  font-size: 13px;
+  color: var(--muted);
+  transition: transform 0.2s;
+}
+.panel.collapsed .chevron { transform: rotate(-90deg); }
+.panel.collapsed .panel-body { display: none; }
+.panel.collapsed h2 { margin-bottom: 0; }
 .role-card {
   display: flex;
   flex-direction: column;
@@ -195,6 +209,54 @@ button.primary:active { transform: translateY(1px); }
   border: 1px solid var(--line);
   color: var(--accent-2);
 }
+
+/* Night order (chronicle of who wakes when) */
+.night-order {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  counter-reset: step;
+}
+.night-order .night-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  border-left: 3px solid var(--line);
+  margin-bottom: 4px;
+  opacity: 0.6;
+  transition: opacity 0.2s, background 0.2s, border-color 0.2s;
+}
+.night-order .night-step::before {
+  counter-increment: step;
+  content: counter(step);
+  flex: 0 0 auto;
+  width: 17px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 22px;
+}
+.night-order .no-emoji { font-size: 18px; line-height: 22px; }
+.night-order .no-text { display: flex; flex-direction: column; gap: 1px; }
+.night-order .no-role {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--accent-2);
+}
+.night-order .no-desc { font-size: 11px; color: var(--muted); line-height: 1.3; }
+.night-order .night-step.active {
+  opacity: 1;
+  background: var(--bg-2);
+  border-left-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.night-order .night-step.done { opacity: 0.85; border-left-color: var(--good); }
+.night-order .night-step.done::before { content: "✓"; color: var(--good); }
 
 /* ---------- Main / transcript ---------- */
 .main { min-width: 0; }

@@ -5,6 +5,23 @@ const ROLE_EMOJI = {
   troublemaker: "🤹", drunk: "🍺", insomniac: "😴", villager: "🧑‍🌾",
 };
 
+// The sequence in which roles wake at night (mirrors engine.WAKE_ORDER).
+// Villagers never wake, so they are absent here.
+const WAKE_ORDER = [
+  "werewolf", "minion", "seer", "robber", "troublemaker", "drunk", "insomniac",
+];
+
+// One-line reminder of what each role does on its turn, for the night chronicle.
+const ROLE_NIGHT_DESC = {
+  werewolf: "see the other werewolves",
+  minion: "see who the werewolves are",
+  seer: "peek a player's card or two center cards",
+  robber: "swap with a player, then see the new card",
+  troublemaker: "swap two other players' cards",
+  drunk: "swap with a center card (blind)",
+  insomniac: "check own card after all swaps",
+};
+
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -90,6 +107,40 @@ function setRosterChip(seat, text, cls) {
   const chip = li.querySelector(".status-chip");
   chip.textContent = text;
   chip.className = "chip status-chip" + (cls ? " " + cls : "");
+}
+
+// Night chronicle: the ordered list of roles that wake, so the human can
+// follow (and remember) the sequence — useful in larger games. Built from the
+// public deck composition; only roles actually in the deck are shown, in wake
+// order. Villagers never wake and are omitted.
+function buildNightOrder(rolesInDeck) {
+  const present = new Set(rolesInDeck.map((r) => r.role));
+  const ol = $("night-order");
+  ol.innerHTML = "";
+  WAKE_ORDER.filter((role) => present.has(role)).forEach((role) => {
+    const li = el("li", "night-step");
+    li.dataset.role = role;
+    li.appendChild(el("span", "no-emoji", ROLE_EMOJI[role] || "🃏"));
+    const text = el("span", "no-text");
+    text.appendChild(el("span", "no-role", role));
+    text.appendChild(el("span", "no-desc", ROLE_NIGHT_DESC[role] || ""));
+    li.appendChild(text);
+    ol.appendChild(li);
+  });
+}
+
+// Update chronicle progress. role=null marks every step done (end of night).
+function markNightStep(role, status) {
+  const steps = $("night-order").querySelectorAll(".night-step");
+  steps.forEach((li) => {
+    if (role === null) {
+      li.classList.remove("active");
+      li.classList.add("done");
+    } else if (li.dataset.role === role) {
+      li.classList.remove("active", "done");
+      li.classList.add(status);
+    }
+  });
 }
 
 function buildTranscriptCards() {
@@ -229,6 +280,7 @@ const handlers = {
       const label = r.count > 1 ? `${r.role} ×${r.count}` : r.role;
       deck.appendChild(el("span", "deck-chip", `${ROLE_EMOJI[r.role] || ""} ${label}`));
     });
+    buildNightOrder(m.roles_in_deck);
   },
 
   your_role(m) {
@@ -244,14 +296,17 @@ const handlers = {
   night_wake(m) {
     setBanner("Night");
     setNarration(`The ${m.label} wakes…`);
+    markNightStep(m.role, "active");
   },
 
   night_sleep(m) {
     setNarration(`The ${m.role.toUpperCase()} goes back to sleep.`);
+    markNightStep(m.role, "done");
   },
 
   night_result(m) {
     setNarration("Morning arrives. Everyone opens their eyes.");
+    markNightStep(null, "done");
     const ul = $("you-observations");
     ul.innerHTML = "";
     if (!m.observations.length) {
@@ -467,6 +522,12 @@ $("start-btn").onclick = () => {
   $("start-status").textContent = "Dealing…";
   connectAndStart(opts);
 };
+
+// Each sidebar panel collapses independently; panels keep their order in the
+// column (no sticky/floating) so relative positions never shift.
+document.querySelectorAll(".panel-toggle").forEach((h2) => {
+  h2.onclick = () => h2.closest(".panel").classList.toggle("collapsed");
+});
 
 $("play-again").onclick = () => {
   if (state.ws) state.ws.close();
